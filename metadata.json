@@ -1,0 +1,8 @@
+{
+  "name": "Kerigma Acolhimento",
+  "description": "Aplicativo para cadastro e gestão de visitantes e novos membros da igreja Kerigma.",
+  "requestFramePermissions": [
+    "microphone"
+  ],
+  "majorCapabilities": []
+}

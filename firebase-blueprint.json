@@ -1,0 +1,25 @@
+{
+  "entities": {
+    "Person": {
+      "title": "Person",
+      "description": "A visitor or new member of the church",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "birthDate": { "type": "string", "format": "date" },
+        "whatsapp": { "type": "string" },
+        "story": { "type": "string" },
+        "type": { "type": "string", "enum": ["visitor", "member"] },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["name", "whatsapp", "type", "createdAt"]
+    }
+  },
+  "firestore": {
+    "/people": {
+      "schema": "Person",
+      "description": "Collection of visitors and new members"
+    }
+  }
+}
