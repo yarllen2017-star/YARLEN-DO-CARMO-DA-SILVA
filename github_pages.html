@@ -1,0 +1,261 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Igreja Kerigma - Acolhimento</title>
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Google Fonts -->
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;900&display=swap" rel="stylesheet">
+    <style>
+        body { font-family: 'Inter', sans-serif; }
+    </style>
+</head>
+<body class="bg-zinc-50 text-zinc-900">
+    <div id="root"></div>
+
+    <!-- React and Babel -->
+    <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    
+    <!-- Lucide Icons -->
+    <script src="https://unpkg.com/lucide@latest"></script>
+    
+    <!-- Framer Motion -->
+    <script src="https://unpkg.com/framer-motion@10.16.4/dist/framer-motion.js"></script>
+
+    <!-- Date-fns -->
+    <script src="https://cdn.jsdelivr.net/npm/date-fns@2.30.0/cdn.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/date-fns@2.30.0/locale/pt-BR/index.js"></script>
+
+    <!-- Firebase -->
+    <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore-compat.js"></script>
+
+    <script type="text/babel">
+        const { useState, useEffect, useRef } = React;
+        const { motion, AnimatePresence } = window.Motion || {}; // Fallback for Motion
+
+        // Firebase Config
+        const firebaseConfig = {
+            projectId: "gen-lang-client-0486139804",
+            appId: "1:1089075721669:web:d444c2ed8c4205c9be07ac",
+            apiKey: "AIzaSyBPqEN3NvVlnaCNcY4KVQEKbrDRCQ6yAog",
+            authDomain: "gen-lang-client-0486139804.firebaseapp.com",
+            storageBucket: "gen-lang-client-0486139804.firebasestorage.app",
+            messagingSenderId: "1089075721669"
+        };
+
+        // Initialize Firebase
+        firebase.initializeApp(firebaseConfig);
+        const db = firebase.firestore();
+
+        // --- UI Components ---
+        const Card = ({ children, className = "" }) => <div className={`bg-white rounded-3xl shadow-xl overflow-hidden ${className}`}>{children}</div>;
+        const CardHeader = ({ children, className = "" }) => <div className={`p-6 pb-4 ${className}`}>{children}</div>;
+        const CardTitle = ({ children, className = "" }) => <h3 className={`text-2xl font-bold ${className}`}>{children}</h3>;
+        const CardDescription = ({ children, className = "" }) => <p className={`text-zinc-500 text-sm ${className}`}>{children}</p>;
+        const CardContent = ({ children, className = "" }) => <div className={`p-6 pt-0 ${className}`}>{children}</div>;
+        const CardFooter = ({ children, className = "" }) => <div className={`p-6 pt-0 ${className}`}>{children}</div>;
+        
+        const Button = ({ children, onClick, className = "", variant = "primary", disabled = false, type = "button" }) => {
+            const variants = {
+                primary: "bg-zinc-900 text-white hover:bg-zinc-800",
+                secondary: "bg-white text-zinc-900 border border-zinc-200 hover:bg-zinc-50",
+                ghost: "hover:bg-zinc-100 text-zinc-500 hover:text-zinc-900",
+                danger: "bg-red-50 text-red-600 hover:bg-red-100"
+            };
+            return (
+                <button type={type} onClick={onClick} disabled={disabled} className={`inline-flex items-center justify-center px-4 py-2 rounded-xl font-bold transition-all disabled:opacity-50 ${variants[variant]} ${className}`}>
+                    {children}
+                </button>
+            );
+        };
+
+        const Input = ({ value, onChange, placeholder, className = "", id, type = "text" }) => (
+            <input id={id} type={type} value={value} onChange={onChange} placeholder={placeholder} className={`w-full h-12 px-4 rounded-xl border border-zinc-200 focus:ring-2 focus:ring-zinc-900 focus:border-zinc-900 outline-none ${className}`} />
+        );
+
+        const Label = ({ children, htmlFor }) => <label htmlFor={htmlFor} className="text-sm font-semibold block mb-1">{children}</label>;
+        const Textarea = ({ value, onChange, placeholder, className = "", id }) => (
+            <textarea id={id} value={value} onChange={onChange} placeholder={placeholder} className={`w-full p-4 rounded-xl border border-zinc-200 focus:ring-2 focus:ring-zinc-900 focus:border-zinc-900 outline-none resize-none ${className}`} />
+        );
+
+        const Badge = ({ children, className = "" }) => (
+            <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold uppercase tracking-wider ${className}`}>{children}</span>
+        );
+
+        function App() {
+            const [isLoggedIn, setIsLoggedIn] = useState(false);
+            const [username, setUsername] = useState('');
+            const [people, setPeople] = useState([]);
+            const [loading, setLoading] = useState(true);
+            const [searchDate, setSearchDate] = useState(null);
+            const [searchName, setSearchName] = useState('');
+            
+            const [name, setName] = useState('');
+            const [birthDateInput, setBirthDateInput] = useState('');
+            const [whatsapp, setWhatsapp] = useState('');
+            const [story, setStory] = useState('');
+            const [isRecording, setIsRecording] = useState(false);
+            const [submitting, setSubmitting] = useState(false);
+            const [activeTab, setActiveTab] = useState('register');
+
+            const recognitionRef = useRef(null);
+
+            const handleDateChange = (e) => {
+                let value = e.target.value.replace(/\D/g, '');
+                if (value.length > 8) value = value.slice(0, 8);
+                let maskedValue = '';
+                if (value.length > 0) {
+                    maskedValue = value.slice(0, 2);
+                    if (value.length > 2) {
+                        maskedValue += '/' + value.slice(2, 4);
+                        if (value.length > 4) maskedValue += '/' + value.slice(4, 8);
+                    }
+                }
+                setBirthDateInput(maskedValue);
+            };
+
+            useEffect(() => {
+                if (!isLoggedIn) return;
+                const unsubscribe = db.collection('people').orderBy('createdAt', 'desc').onSnapshot((snapshot) => {
+                    const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+                    setPeople(data);
+                    setLoading(false);
+                });
+                return () => unsubscribe();
+            }, [isLoggedIn]);
+
+            const handleLogin = (e) => {
+                e.preventDefault();
+                if (username.trim().toUpperCase() === 'KERIGMA') setIsLoggedIn(true);
+                else alert("Usuário incorreto.");
+            };
+
+            const handleSubmit = async (type) => {
+                if (!name || !whatsapp) { alert("Preencha os campos obrigatórios."); return; }
+                setSubmitting(true);
+                try {
+                    let formattedBirthDate = '';
+                    if (birthDateInput && birthDateInput.length === 10) {
+                        const [day, month, year] = birthDateInput.split('/');
+                        formattedBirthDate = `${year}-${month}-${day}`;
+                    }
+                    await db.collection('people').add({
+                        name, birthDate: formattedBirthDate, whatsapp, story, type,
+                        createdAt: firebase.firestore.Timestamp.now()
+                    });
+                    alert("Cadastrado com sucesso!");
+                    setName(''); setBirthDateInput(''); setWhatsapp(''); setStory(''); setActiveTab('list');
+                } catch (e) { alert("Erro ao cadastrar."); } finally { setSubmitting(false); }
+            };
+
+            const filteredPeople = people.filter(p => {
+                const matchesDate = !searchDate || (p.createdAt && dateFns.isSameDay(p.createdAt.toDate(), new Date(searchDate)));
+                const matchesName = !searchName || p.name.toLowerCase().includes(searchName.toLowerCase());
+                return matchesDate && matchesName;
+            });
+
+            if (!isLoggedIn) {
+                return (
+                    <div className="min-h-screen flex items-center justify-center p-4">
+                        <Card className="w-full max-w-md">
+                            <div className="h-2 bg-zinc-900" />
+                            <CardHeader className="text-center pb-8 border-b border-zinc-100 mb-6">
+                                <div className="mx-auto bg-zinc-900 w-20 h-20 rounded-full flex items-center justify-center mb-4 shadow-xl border-4 border-white">
+                                    <i data-lucide="users" className="text-white w-10 h-10"></i>
+                                </div>
+                                <CardTitle className="text-3xl font-black uppercase tracking-tighter">Igreja Kerigma</CardTitle>
+                                <CardDescription>Um lugar de acolhimento</CardDescription>
+                            </CardHeader>
+                            <CardContent>
+                                <form onSubmit={handleLogin} className="space-y-4">
+                                    <div className="space-y-2">
+                                        <Label htmlFor="username">Usuário</Label>
+                                        <Input id="username" placeholder="Digite o usuário..." value={username} onChange={(e) => setUsername(e.target.value)} />
+                                    </div>
+                                    <Button type="submit" className="w-full h-12">Entrar</Button>
+                                </form>
+                            </CardContent>
+                        </Card>
+                    </div>
+                );
+            }
+
+            return (
+                <div className="min-h-screen">
+                    <header className="bg-white border-b border-zinc-200 sticky top-0 z-10 px-4 h-20 flex items-center justify-between">
+                        <div className="flex items-center gap-3">
+                            <div className="bg-zinc-900 p-2 rounded-lg"><i data-lucide="users" className="text-white w-6 h-6"></i></div>
+                            <h1 className="text-xl font-bold">Kerigma Acolhimento</h1>
+                        </div>
+                        <Button variant="ghost" onClick={() => setIsLoggedIn(false)}>Sair</Button>
+                    </header>
+
+                    <main className="max-w-7xl mx-auto px-4 py-8">
+                        <div className="flex justify-center mb-8 gap-2 bg-zinc-100 p-1 rounded-2xl w-full max-w-md mx-auto">
+                            <button onClick={() => setActiveTab('register')} className={`flex-1 py-3 rounded-xl font-bold transition-all ${activeTab === 'register' ? 'bg-white shadow text-zinc-900' : 'text-zinc-500'}`}>Cadastrar</button>
+                            <button onClick={() => setActiveTab('list')} className={`flex-1 py-3 rounded-xl font-bold transition-all ${activeTab === 'list' ? 'bg-white shadow text-zinc-900' : 'text-zinc-500'}`}>Cadastrados</button>
+                        </div>
+
+                        {activeTab === 'register' ? (
+                            <Card className="max-w-2xl mx-auto">
+                                <CardHeader>
+                                    <CardTitle>Novo Cadastro</CardTitle>
+                                    <CardDescription>Cadastre um novo visitante ou membro</CardDescription>
+                                </CardHeader>
+                                <CardContent className="space-y-6">
+                                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                        <div><Label>Nome Completo</Label><Input value={name} onChange={(e) => setName(e.target.value)} /></div>
+                                        <div><Label>Nascimento</Label><Input placeholder="DD/MM/AAAA" value={birthDateInput} onChange={handleDateChange} /></div>
+                                    </div>
+                                    <div><Label>WhatsApp</Label><Input value={whatsapp} onChange={(e) => setWhatsapp(e.target.value)} /></div>
+                                    <div><Label>História</Label><Textarea value={story} onChange={(e) => setStory(e.target.value)} className="min-h-[100px]" /></div>
+                                    <div className="flex gap-4">
+                                        <Button onClick={() => handleSubmit('visitor')} variant="secondary" className="flex-1">Visitante</Button>
+                                        <Button onClick={() => handleSubmit('member')} className="flex-1">Novo Membro</Button>
+                                    </div>
+                                </CardContent>
+                            </Card>
+                        ) : (
+                            <div className="space-y-6">
+                                <div className="bg-white p-6 rounded-3xl border border-zinc-200 flex flex-col md:flex-row gap-4">
+                                    <Input placeholder="Buscar por nome..." value={searchName} onChange={(e) => setSearchName(e.target.value)} className="flex-1" />
+                                    <input type="date" onChange={(e) => setSearchDate(e.target.value)} className="h-12 px-4 rounded-xl border border-zinc-200" />
+                                </div>
+                                <Card>
+                                    <div className="overflow-x-auto">
+                                        <table className="w-full text-left">
+                                            <thead className="bg-zinc-50 border-b">
+                                                <tr><th className="p-4">Nome</th><th className="p-4">WhatsApp</th><th className="p-4">Tipo</th></tr>
+                                            </thead>
+                                            <tbody>
+                                                {filteredPeople.map(p => (
+                                                    <tr key={p.id} className="border-b">
+                                                        <td className="p-4 font-bold">{p.name}</td>
+                                                        <td className="p-4">{p.whatsapp}</td>
+                                                        <td className="p-4"><Badge className={p.type === 'visitor' ? 'bg-blue-50 text-blue-600' : 'bg-emerald-50 text-emerald-600'}>{p.type}</Badge></td>
+                                                    </tr>
+                                                ))}
+                                            </tbody>
+                                        </table>
+                                    </div>
+                                </Card>
+                            </div>
+                        )}
+                    </main>
+                </div>
+            );
+        }
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+        const observer = new MutationObserver(() => lucide.createIcons());
+        observer.observe(document.getElementById('root'), { childList: true, subtree: true });
+        lucide.createIcons();
+    </script>
+</body>
+</html>

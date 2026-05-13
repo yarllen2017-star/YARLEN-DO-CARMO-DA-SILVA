@@ -8,6 +8,7 @@ import { cn } from '@/lib/utils';
 import { 
   collection, 
   addDoc, 
+  deleteDoc,
   onSnapshot, 
   query, 
   orderBy, 
@@ -55,12 +56,34 @@ import {
   Lock,
   LogOut,
   ChevronRight,
-  History
+  History,
+  BarChart3,
+  TrendingUp,
+  AlertCircle,
+  Trash2
 } from 'lucide-react';
-import { format, isSameDay, parseISO } from 'date-fns';
+import { format, isSameDay, parseISO, startOfMonth, endOfMonth, isWithinInterval } from 'date-fns';
 import { ptBR } from 'date-fns/locale';
 import { Toaster, toast } from 'sonner';
 import { motion, AnimatePresence } from 'motion/react';
+import { 
+  BarChart, 
+  Bar, 
+  XAxis, 
+  YAxis, 
+  CartesianGrid, 
+  Tooltip, 
+  ResponsiveContainer, 
+  Cell 
+} from 'recharts';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 
 // --- Types ---
 
@@ -72,6 +95,7 @@ interface Person {
   story?: string;
   type: 'visitor' | 'member';
   createdAt: Timestamp;
+  isReturn?: boolean;
 }
 
 enum OperationType {
@@ -125,8 +149,22 @@ export default function App() {
   const [isRecording, setIsRecording] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [activeTab, setActiveTab] = useState('register');
+  const [reportTab, setReportTab] = useState('monthly');
+  const [selectedMonth, setSelectedMonth] = useState<string | null>(null);
+
+  // Duplicate Check State
+  const [showDuplicateDialog, setShowDuplicateDialog] = useState(false);
+  const [pendingType, setPendingType] = useState<'visitor' | 'member' | null>(null);
 
   const recognitionRef = useRef<any>(null);
+
+  // Duplicate check logic
+  useEffect(() => {
+    if (name.length > 3) {
+      const exists = people.some(p => p.name.toLowerCase().trim() === name.toLowerCase().trim());
+      // Only show if not already submitting and the name is reasonably long
+    }
+  }, [name, people]);
 
   // Mask for Date (DD/MM/YYYY)
   const handleDateChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -179,6 +217,17 @@ export default function App() {
     return () => unsubscribe();
   }, [isLoggedIn]);
 
+  const handleDelete = async (personId: string | undefined) => {
+    if (!personId) return;
+    
+    try {
+      await deleteDoc(doc(db, 'people', personId));
+      toast.success("Registro apagado com sucesso!");
+    } catch (error) {
+      handleFirestoreError(error, OperationType.DELETE, `people/${personId}`);
+    }
+  };
+
   // Login Handler
   const handleLogin = (e: React.FormEvent) => {
     e.preventDefault();
@@ -191,10 +240,20 @@ export default function App() {
   };
 
   // Form Submission
-  const handleSubmit = async (type: 'visitor' | 'member') => {
+  const handleSubmit = async (type: 'visitor' | 'member', confirmedReturn: boolean = false) => {
     if (!name || !whatsapp) {
       toast.error("Por favor, preencha o nome e o WhatsApp.");
       return;
+    }
+
+    // Check for duplicate if not already confirmed
+    if (!confirmedReturn) {
+      const isDuplicate = people.some(p => p.name.toLowerCase().trim() === name.toLowerCase().trim());
+      if (isDuplicate) {
+        setPendingType(type);
+        setShowDuplicateDialog(true);
+        return;
+      }
     }
 
     setSubmitting(true);
@@ -217,16 +276,19 @@ export default function App() {
         whatsapp,
         story,
         type,
+        isReturn: confirmedReturn,
         createdAt: Timestamp.now()
       });
       
-      toast.success(`${type === 'visitor' ? 'Visitante' : 'Membro'} cadastrado com sucesso!`);
+      toast.success(`${type === 'visitor' ? 'Visitante' : 'Membro'} cadastrado com sucesso!${confirmedReturn ? ' (Registrado como retorno)' : ''}`);
       
       // Reset form
       setName('');
       setBirthDateInput('');
       setWhatsapp('');
       setStory('');
+      setShowDuplicateDialog(false);
+      setPendingType(null);
       
       // Switch to list tab to see the result
       setActiveTab('list');
@@ -279,6 +341,48 @@ export default function App() {
     const matchesName = !searchName || p.name.toLowerCase().includes(searchName.toLowerCase());
     return matchesDate && matchesName;
   });
+
+  // Reporting Logic
+  const getMonthlyData = () => {
+    const months: Record<string, { month: string; count: number; visitors: Person[] }> = {};
+    
+    people.forEach(p => {
+      const date = p.createdAt.toDate();
+      const monthKey = format(date, 'MMM/yy', { locale: ptBR });
+      if (!months[monthKey]) {
+        months[monthKey] = { month: monthKey, count: 0, visitors: [] };
+      }
+      months[monthKey].count++;
+      months[monthKey].visitors.push(p);
+    });
+
+    return Object.values(months).reverse();
+  };
+
+  const getReturnees = () => {
+    const counts: Record<string, { person: Person; dates: Date[]; count: number }> = {};
+    
+    people.forEach(p => {
+      const key = p.name.toLowerCase().trim();
+      if (!counts[key]) {
+        counts[key] = { person: p, dates: [], count: 0 };
+      }
+      counts[key].count++;
+      counts[key].dates.push(p.createdAt.toDate());
+    });
+
+    return Object.values(counts)
+      .filter(v => v.count > 1)
+      .sort((a, b) => b.count - a.count);
+  };
+
+  const monthlyData = getMonthlyData();
+  const returneesData = getReturnees();
+
+  // Helper to check if a person is a returnee (more than 1 visit in total history)
+  const isPersonReturnee = (name: string) => {
+    return people.filter(p => p.name.toLowerCase().trim() === name.toLowerCase().trim()).length > 1;
+  };
 
   const Logo = ({ className }: { className?: string }) => (
     <img 
@@ -365,14 +469,18 @@ export default function App() {
       <main className="max-w-7xl mx-auto px-4 py-8">
         <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-8">
           <div className="flex justify-center">
-            <TabsList className="bg-zinc-200/50 p-1 rounded-2xl h-14 w-full max-w-md border border-zinc-200">
-              <TabsTrigger value="register" className="rounded-xl flex-1 data-[state=active]:bg-white data-[state=active]:shadow-sm data-[state=active]:text-zinc-900 text-zinc-500 font-medium transition-all gap-2">
+            <TabsList className="bg-zinc-200/50 p-1 rounded-2xl h-14 w-full max-w-lg border border-zinc-200">
+              <TabsTrigger value="register" className="rounded-xl flex-1 data-[state=active]:bg-white data-[state=active]:shadow-sm data-[state=active]:text-zinc-900 text-zinc-500 font-medium transition-all gap-2 px-3">
                 <UserPlus className="w-4 h-4" />
-                Cadastrar
+                <span className="hidden sm:inline">Cadastrar</span>
               </TabsTrigger>
-              <TabsTrigger value="list" className="rounded-xl flex-1 data-[state=active]:bg-white data-[state=active]:shadow-sm data-[state=active]:text-zinc-900 text-zinc-500 font-medium transition-all gap-2">
+              <TabsTrigger value="list" className="rounded-xl flex-1 data-[state=active]:bg-white data-[state=active]:shadow-sm data-[state=active]:text-zinc-900 text-zinc-500 font-medium transition-all gap-2 px-3">
                 <History className="w-4 h-4" />
-                Cadastrados
+                <span className="hidden sm:inline">Cadastrados</span>
+              </TabsTrigger>
+              <TabsTrigger value="reports" className="rounded-xl flex-1 data-[state=active]:bg-white data-[state=active]:shadow-sm data-[state=active]:text-zinc-900 text-zinc-500 font-medium transition-all gap-2 px-3">
+                <BarChart3 className="w-4 h-4" />
+                <span className="hidden sm:inline">Relatórios</span>
               </TabsTrigger>
             </TabsList>
           </div>
@@ -494,7 +602,7 @@ export default function App() {
                   
                   <div className="flex items-center gap-2 w-full md:w-auto">
                     <Popover>
-                      <PopoverTrigger asChild>
+                      <PopoverTrigger>
                         <div
                           role="button"
                           tabIndex={0}
@@ -555,10 +663,15 @@ export default function App() {
                             </TableCell>
                           </TableRow>
                         ) : (
-                          filteredPeople.map((person, index) => (
-                            <TableRow key={`${person.id}-${index}`} className="group hover:bg-zinc-50/50 transition-colors border-zinc-100">
+                          filteredPeople.map((person) => (
+                            <TableRow key={person.id} className="group hover:bg-zinc-50/50 transition-colors border-zinc-100">
                               <TableCell className="py-4 pl-6">
-                                <div className="font-bold text-zinc-900">{person.name}</div>
+                                <div className="flex items-center gap-2">
+                                  <div className="font-bold text-zinc-900">{person.name}</div>
+                                  {(person.isReturn || isPersonReturnee(person.name)) && (
+                                    <div className="w-2.5 h-2.5 rounded-full bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.5)] animate-pulse" title="Visitante de Retorno" />
+                                  )}
+                                </div>
                                 <div className="flex items-center gap-2 mt-1">
                                   <span className="text-[10px] font-medium text-zinc-400 uppercase tracking-wider">
                                     {format(person.createdAt.toDate(), 'dd/MM/yy')}
@@ -592,7 +705,7 @@ export default function App() {
                               </TableCell>
                               <TableCell className="text-right pr-6">
                               <Popover>
-                                <PopoverTrigger asChild>
+                                <PopoverTrigger>
                                   <div
                                     role="button"
                                     tabIndex={0}
@@ -630,6 +743,18 @@ export default function App() {
                                         </p>
                                       </div>
                                     </div>
+
+                                    <div className="pt-4 border-t border-zinc-100 flex justify-end">
+                                      <Button 
+                                        variant="ghost" 
+                                        size="sm" 
+                                        onClick={() => handleDelete(person.id)}
+                                        className="text-red-500 hover:text-red-600 hover:bg-red-50 rounded-xl gap-2 w-full"
+                                      >
+                                        <Trash2 className="w-4 h-4" />
+                                        Apagar Dados
+                                      </Button>
+                                    </div>
                                   </div>
                                 </PopoverContent>
                               </Popover>
@@ -643,8 +768,213 @@ export default function App() {
               </Card>
             </motion.div>
             </TabsContent>
+
+            <TabsContent value="reports">
+              <motion.div 
+                initial={{ opacity: 0, scale: 0.98 }}
+                animate={{ opacity: 1, scale: 1 }}
+                exit={{ opacity: 0, scale: 0.98 }}
+                className="space-y-6"
+              >
+                <div className="flex flex-col sm:flex-row gap-4 justify-between items-center bg-white p-4 rounded-3xl border border-zinc-200">
+                  <div className="flex gap-2">
+                    <Button 
+                      variant={reportTab === 'monthly' ? "default" : "ghost"}
+                      onClick={() => setReportTab('monthly')}
+                      className="rounded-2xl px-6"
+                    >
+                      Visitas no Mês
+                    </Button>
+                    <Button 
+                      variant={reportTab === 'returnees' ? "default" : "ghost"}
+                      onClick={() => setReportTab('returnees')}
+                      className="rounded-2xl px-6"
+                    >
+                      Retornos
+                    </Button>
+                  </div>
+                </div>
+
+                {reportTab === 'monthly' ? (
+                  <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                    <Card className="lg:col-span-2 border-none shadow-xl bg-white rounded-[2rem] p-6">
+                      <div className="flex items-center justify-between mb-8">
+                        <div>
+                          <CardTitle>Visitas Mensais</CardTitle>
+                          <CardDescription>Evolução de acolhimentos por mês</CardDescription>
+                        </div>
+                        <TrendingUp className="text-zinc-400 w-6 h-6" />
+                      </div>
+                      <div className="h-[300px] w-full">
+                        <ResponsiveContainer width="100%" height="100%">
+                          <BarChart data={monthlyData} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
+                            <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f0f0f0" />
+                            <XAxis 
+                              dataKey="month" 
+                              axisLine={false} 
+                              tickLine={false} 
+                              tick={{ fill: '#a1a1aa', fontSize: 12 }} 
+                            />
+                            <YAxis 
+                              axisLine={false} 
+                              tickLine={false} 
+                              tick={{ fill: '#a1a1aa', fontSize: 12 }} 
+                            />
+                            <Tooltip 
+                              cursor={{ fill: '#f4f4f5' }}
+                              contentStyle={{ borderRadius: '16px', border: 'none', boxShadow: '0 20px 25px -5px rgb(0 0 0 / 0.1)' }}
+                            />
+                            <Bar 
+                              dataKey="count" 
+                              name="Visitas" 
+                              radius={[6, 6, 0, 0]}
+                              onClick={(data) => setSelectedMonth(data.month === selectedMonth ? null : data.month)}
+                              className="cursor-pointer"
+                            >
+                              {monthlyData.map((entry) => (
+                                <Cell 
+                                  key={entry.month} 
+                                  fill={entry.month === selectedMonth ? '#18181b' : '#e4e4e7'} 
+                                />
+                              ))}
+                            </Bar>
+                          </BarChart>
+                        </ResponsiveContainer>
+                      </div>
+                    </Card>
+
+                    <Card className="border-none shadow-xl bg-white rounded-[2rem] overflow-hidden flex flex-col">
+                      <CardHeader className="bg-zinc-50/50">
+                        <CardTitle className="text-lg">Filtro Detalhado</CardTitle>
+                        <CardDescription>
+                          {selectedMonth ? `Visitantes em ${selectedMonth}` : 'Selecione um mês no gráfico'}
+                        </CardDescription>
+                      </CardHeader>
+                      <CardContent className="flex-1 overflow-y-auto max-h-[400px] pt-4 p-0">
+                        {!selectedMonth ? (
+                          <div className="flex flex-col items-center justify-center p-12 text-center">
+                            <BarChart3 className="w-12 h-12 text-zinc-200 mb-4" />
+                            <p className="text-zinc-400 font-medium">Selecione uma barra para ver os nomes</p>
+                          </div>
+                        ) : (
+                          <div className="divide-y divide-zinc-100">
+                            {monthlyData.find(m => m.month === selectedMonth)?.visitors.map((v) => (
+                              <div key={v.id} className="px-6 py-4 hover:bg-zinc-50 transition-colors">
+                                <p className="font-bold text-zinc-900">{v.name}</p>
+                                <div className="flex justify-between items-center mt-1">
+                                  <p className="text-xs text-zinc-500">{format(v.createdAt.toDate(), 'dd/MM/yyyy')}</p>
+                                  <Badge className={v.type === 'visitor' ? 'bg-blue-50 text-blue-600' : 'bg-emerald-50 text-emerald-600'}>
+                                    {v.type === 'visitor' ? 'V' : 'M'}
+                                  </Badge>
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </CardContent>
+                    </Card>
+                  </div>
+                ) : (
+                  <Card className="border-none shadow-xl bg-white rounded-[2rem] overflow-hidden">
+                    <CardHeader className="bg-zinc-50/50 p-8">
+                      <div className="flex items-center gap-4">
+                        <div className="bg-emerald-500/10 p-3 rounded-2xl">
+                          <History className="text-emerald-600 w-6 h-6" />
+                        </div>
+                        <div>
+                          <CardTitle>Retornos de Visitas</CardTitle>
+                          <CardDescription>Pessoas que visitaram a igreja mais de uma vez</CardDescription>
+                        </div>
+                      </div>
+                    </CardHeader>
+                    <div className="overflow-x-auto">
+                      <Table>
+                        <TableHeader>
+                          <TableRow className="hover:bg-transparent border-zinc-100">
+                            <TableHead className="font-bold py-6 pl-8">Pessoa</TableHead>
+                            <TableHead className="font-bold text-center">Vezes</TableHead>
+                            <TableHead className="font-bold">Datas das Visitas</TableHead>
+                          </TableRow>
+                        </TableHeader>
+                        <TableBody>
+                          {returneesData.length === 0 ? (
+                            <TableRow>
+                              <TableCell colSpan={3} className="text-center py-20 text-zinc-400 font-medium">Nenhum retorno identificado ainda.</TableCell>
+                            </TableRow>
+                          ) : (
+                            returneesData.map((data) => (
+                              <TableRow key={data.person.id} className="border-zinc-100 hover:bg-zinc-50/50 transition-colors">
+                                <TableCell className="py-6 pl-8">
+                                  <p className="font-bold text-zinc-900 text-lg">{data.person.name}</p>
+                                  <p className="text-zinc-500 text-xs font-mono">{data.person.whatsapp}</p>
+                                </TableCell>
+                                <TableCell className="text-center">
+                                  <div className="inline-flex items-center justify-center bg-zinc-900 text-white w-10 h-10 rounded-full font-black">
+                                    {data.count}
+                                  </div>
+                                </TableCell>
+                                <TableCell>
+                                  <div className="flex flex-wrap gap-2">
+                                    {data.dates.sort((a, b) => b.getTime() - a.getTime()).map((d, di) => (
+                                      <Badge key={di} variant="secondary" className="bg-zinc-100 text-zinc-600 font-medium rounded-lg border-none px-2 py-1">
+                                        {format(d, 'dd/MM/yy')}
+                                      </Badge>
+                                    ))}
+                                  </div>
+                                </TableCell>
+                              </TableRow>
+                            ))
+                          )}
+                        </TableBody>
+                      </Table>
+                    </div>
+                  </Card>
+                )}
+              </motion.div>
+            </TabsContent>
           </AnimatePresence>
         </Tabs>
+
+        {/* Duplicate Confirmation Dialog */}
+        <Dialog open={showDuplicateDialog} onOpenChange={setShowDuplicateDialog}>
+          <DialogContent className="sm:max-w-md rounded-[2rem] border-none shadow-2xl">
+            <DialogHeader className="space-y-3">
+              <div className="mx-auto bg-amber-50 w-16 h-16 rounded-full flex items-center justify-center mb-2">
+                <AlertCircle className="text-amber-500 w-8 h-8" />
+              </div>
+              <DialogTitle className="text-center text-xl font-bold">Visitante Encontrado</DialogTitle>
+              <DialogDescription className="text-center text-zinc-600">
+                O nome <span className="font-bold text-zinc-900">"{name}"</span> já existe em nossa base de dados.
+                Deseja registrar essa nova entrada como um <span className="font-bold text-emerald-600">retorno</span>?
+              </DialogDescription>
+            </DialogHeader>
+            <DialogFooter className="flex flex-col sm:flex-row gap-2 mt-4">
+              <Button 
+                variant="ghost" 
+                onClick={() => {
+                  setShowDuplicateDialog(false);
+                  setPendingType(null);
+                }}
+                className="flex-1 rounded-xl"
+              >
+                Não, cancelar
+              </Button>
+              <Button 
+                variant="secondary"
+                onClick={() => pendingType && handleSubmit(pendingType, false)}
+                className="flex-1 rounded-xl"
+              >
+                Sim, novo cadastro
+              </Button>
+              <Button 
+                onClick={() => pendingType && handleSubmit(pendingType, true)}
+                className="flex-1 bg-zinc-900 text-white rounded-xl shadow-lg"
+              >
+                Sim, registrar retorno
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
       </main>
 
       <footer className="max-w-7xl mx-auto px-4 py-12 text-center">

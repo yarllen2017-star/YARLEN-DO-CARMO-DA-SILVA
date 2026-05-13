@@ -30,6 +30,7 @@ service cloud.firestore {
              data.type in ['visitor', 'member'] &&
              data.createdAt is timestamp &&
              (!('birthDate' in data) || data.birthDate is string) &&
+             (!('isReturn' in data) || data.isReturn is bool) &&
              (!('story' in data) || (data.story is string && data.story.size() <= 5000));
     }
 
@@ -39,7 +40,7 @@ service cloud.firestore {
       // is restricted in the Firebase console and the user requested "no login".
       allow read: if true;
       allow create: if isValidPerson(request.resource.data);
-      allow update, delete: if false;
+      allow update, delete: if true;
     }
   }
 }
