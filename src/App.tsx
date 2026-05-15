@@ -62,10 +62,12 @@ import {
   AlertCircle,
   Trash2
 } from 'lucide-react';
-import { format, isSameDay, parseISO, startOfMonth, endOfMonth, isWithinInterval } from 'date-fns';
+import { format, isSameDay, parseISO, startOfMonth, endOfMonth, isWithinInterval, startOfDay } from 'date-fns';
 import { ptBR } from 'date-fns/locale';
 import { Toaster, toast } from 'sonner';
 import { motion, AnimatePresence } from 'motion/react';
+import jsPDF from 'jspdf';
+import autoTable from 'jspdf-autotable';
 import { 
   BarChart, 
   Bar, 
@@ -151,6 +153,7 @@ export default function App() {
   const [activeTab, setActiveTab] = useState('register');
   const [reportTab, setReportTab] = useState('monthly');
   const [selectedMonth, setSelectedMonth] = useState<string | null>(null);
+  const [reportDownloadMonth, setReportDownloadMonth] = useState<string>('');
 
   // Duplicate Check State
   const [showDuplicateDialog, setShowDuplicateDialog] = useState(false);
@@ -342,21 +345,63 @@ export default function App() {
     return matchesDate && matchesName;
   });
 
+  // Grouping logic for the table to avoid duplicate names and show counts
+  const displayedPeople = React.useMemo(() => {
+    // 1. Get total counts for everyone in the database (to show "2x", "3x" even when filtered)
+    const totalCounts = new Map<string, number>();
+    people.forEach(p => {
+      const key = p.name.toLowerCase().trim() + "|" + p.whatsapp.trim();
+      totalCounts.set(key, (totalCounts.get(key) || 0) + 1);
+    });
+
+    // 2. Determine which entries to show based on filters, but only one per person
+    const peopleMap = new Map<string, { person: Person, totalVisits: number }>();
+    
+    filteredPeople.forEach(p => {
+      const key = p.name.toLowerCase().trim() + "|" + p.whatsapp.trim();
+      if (!peopleMap.has(key)) {
+        peopleMap.set(key, { 
+          person: p, 
+          totalVisits: totalCounts.get(key) || 1 
+        });
+      }
+      // Since 'people' is ordered by 'createdAt' desc, the first entry we hit for each name is the latest one.
+    });
+    
+    return Array.from(peopleMap.values());
+  }, [filteredPeople, people]);
+
   // Reporting Logic
   const getMonthlyData = () => {
-    const months: Record<string, { month: string; count: number; visitors: Person[] }> = {};
+    const months: Record<string, { month: string; count: number; visitors: Person[]; firstDate: Date }> = {};
     
+    // Always ensure current month is in the list
+    const now = new Date();
+    const currentMonthKey = format(now, 'MMM/yy', { locale: ptBR });
+    months[currentMonthKey] = { 
+      month: currentMonthKey, 
+      count: 0, 
+      visitors: [], 
+      firstDate: startOfMonth(now) 
+    };
+
     people.forEach(p => {
       const date = p.createdAt.toDate();
       const monthKey = format(date, 'MMM/yy', { locale: ptBR });
       if (!months[monthKey]) {
-        months[monthKey] = { month: monthKey, count: 0, visitors: [] };
+        months[monthKey] = { 
+          month: monthKey, 
+          count: 0, 
+          visitors: [], 
+          firstDate: startOfMonth(date) 
+        };
       }
       months[monthKey].count++;
       months[monthKey].visitors.push(p);
     });
 
-    return Object.values(months).reverse();
+    // Sort months chronologically reversed (descending)
+    return Object.values(months).sort((a, b) => b.firstDate.getTime() - a.firstDate.getTime());
   };
 
   const getReturnees = () => {
@@ -382,6 +427,119 @@ export default function App() {
   // Helper to check if a person is a returnee (more than 1 visit in total history)
   const isPersonReturnee = (name: string) => {
     return people.filter(p => p.name.toLowerCase().trim() === name.toLowerCase().trim()).length > 1;
+  };
+
+  const handleDownloadReport = () => {
+    if (!reportDownloadMonth) {
+      toast.error("Por favor, selecione um mês para baixar o relatório.");
+      return;
+    }
+
+    const monthData = monthlyData.find(m => m.month === reportDownloadMonth);
+    if (!monthData || monthData.visitors.length === 0) {
+      toast.error("Nenhum dado encontrado para o mês selecionado.");
+      return;
+    }
+
+    const visitors = monthData.visitors;
+    const totalVisitors = visitors.length;
+    const totalNewMembers = visitors.filter(v => v.type === 'member').length;
+    const totalNewVisitors = visitors.filter(v => v.type === 'visitor' && !v.isReturn).length;
+    const totalReturns = visitors.filter(v => v.isReturn).length;
+
+    // Group visits per day (cultos)
+    const visitsPerDay: Record<string, number> = {};
+    visitors.forEach(v => {
+      const dateKey = format(v.createdAt.toDate(), 'dd/MM/yyyy');
+      visitsPerDay[dateKey] = (visitsPerDay[dateKey] || 0) + 1;
+    });
+
+    const doc = new jsPDF();
+
+    // Header
+    doc.setFontSize(22);
+    doc.setTextColor(24, 24, 27); // zinc-900
+    doc.text('Igreja Kerigma', 105, 20, { align: 'center' });
+    
+    doc.setFontSize(14);
+    doc.setTextColor(113, 113, 122); // zinc-500
+    doc.text(`Relatório Mensal de Acolhimento - ${reportDownloadMonth}`, 105, 30, { align: 'center' });
+    
+    doc.line(20, 35, 190, 35);
+
+    // Summary Section
+    doc.setFontSize(12);
+    doc.setTextColor(24, 24, 27);
+    doc.setFont('helvetica', 'bold');
+    doc.text('Resumo Geral:', 20, 45);
+    
+    doc.setFont('helvetica', 'normal');
+    doc.text(`• Total de Acolhimentos: ${totalVisitors}`, 25, 52);
+    doc.text(`• Novos Visitantes: ${totalNewVisitors}`, 25, 59);
+    doc.text(`• Novos Membros: ${totalNewMembers}`, 25, 66);
+    doc.text(`• Retornos Identificados: ${totalReturns}`, 25, 73);
+
+    // Visits per Service/Day
+    doc.setFont('helvetica', 'bold');
+    doc.text('Visitas por Culto/Dia:', 20, 85);
+    
+    const visitsTableData = Object.entries(visitsPerDay)
+      .sort((a, b) => {
+        const dateA = a[0].split('/').reverse().join('-');
+        const dateB = b[0].split('/').reverse().join('-');
+        return dateA.localeCompare(dateB);
+      })
+      .map(([date, count]) => [date, count]);
+
+    autoTable(doc, {
+      startY: 90,
+      head: [['Data', 'Quantidade de Visitas']],
+      body: visitsTableData,
+      theme: 'striped',
+      headStyles: { fillColor: [24, 24, 27] },
+      margin: { left: 20 },
+      tableWidth: 80
+    });
+
+    // Visitors List
+    const lastY = (doc as any).lastAutoTable.finalY + 15;
+    doc.setFont('helvetica', 'bold');
+    doc.text('Lista de Pessoas Recebidas:', 20, lastY);
+
+    const visitorsTableData = visitors
+      .sort((a, b) => a.createdAt.toMillis() - b.createdAt.toMillis())
+      .map(v => [
+        v.name,
+        format(v.createdAt.toDate(), 'dd/MM/yy'),
+        v.type === 'visitor' ? 'Visitante' : 'Membro',
+        v.isReturn ? 'Retorno' : 'Novo'
+      ]);
+
+    autoTable(doc, {
+      startY: lastY + 5,
+      head: [['Nome', 'Data', 'Tipo', 'Entrada']],
+      body: visitorsTableData,
+      theme: 'grid',
+      headStyles: { fillColor: [24, 24, 27] },
+      styles: { fontSize: 10 }
+    });
+
+    // Footer
+    const pageCount = (doc as any).internal.getNumberOfPages();
+    for (let i = 1; i <= pageCount; i++) {
+      doc.setPage(i);
+      doc.setFontSize(8);
+      doc.setTextColor(161, 161, 170); // zinc-400
+      doc.text(
+        `Gerado em ${format(new Date(), 'dd/MM/yyyy HH:mm')} - Sistema de Acolhimento Kerigma`,
+        105,
+        285,
+        { align: 'center' }
+      );
+    }
+
+    doc.save(`relatorio_${reportDownloadMonth.replace('/', '_')}.pdf`);
+    toast.success("Relatório baixado com sucesso!");
   };
 
   const Logo = ({ className }: { className?: string }) => (
@@ -656,20 +814,25 @@ export default function App() {
                               Carregando registros...
                             </TableCell>
                           </TableRow>
-                        ) : filteredPeople.length === 0 ? (
+                        ) : displayedPeople.length === 0 ? (
                           <TableRow>
                             <TableCell colSpan={5} className="text-center py-20 text-zinc-400">
                               Nenhum registro encontrado.
                             </TableCell>
                           </TableRow>
                         ) : (
-                          filteredPeople.map((person) => (
+                          displayedPeople.map(({ person, totalVisits }) => (
                             <TableRow key={person.id} className="group hover:bg-zinc-50/50 transition-colors border-zinc-100">
                               <TableCell className="py-4 pl-6">
                                 <div className="flex items-center gap-2">
                                   <div className="font-bold text-zinc-900">{person.name}</div>
-                                  {(person.isReturn || isPersonReturnee(person.name)) && (
-                                    <div className="w-2.5 h-2.5 rounded-full bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.5)] animate-pulse" title="Visitante de Retorno" />
+                                  {totalVisits > 1 && (
+                                    <>
+                                      <Badge variant="outline" className="bg-emerald-50 text-emerald-700 border-emerald-100 font-black px-1.5 h-5 min-w-8 justify-center text-[10px]">
+                                        {totalVisits}x
+                                      </Badge>
+                                      <div className="w-2.5 h-2.5 rounded-full bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.5)] animate-pulse" title="Visitante de Retorno" />
+                                    </>
                                   )}
                                 </div>
                                 <div className="flex items-center gap-2 mt-1">
@@ -709,7 +872,7 @@ export default function App() {
                                   <div
                                     role="button"
                                     tabIndex={0}
-                                    className="flex h-8 w-8 items-center justify-center rounded-full hover:bg-zinc-200 transition-colors cursor-pointer"
+                                    className="flex h-8 w-8 items-center justify-center rounded-full hover:bg-zinc-200 transition-colors cursor-pointer ml-auto"
                                   >
                                     <ChevronRight className="w-4 h-4" />
                                   </div>
@@ -721,7 +884,14 @@ export default function App() {
                                         <Users className="w-5 h-5" />
                                       </div>
                                       <div>
-                                        <h4 className="font-bold text-zinc-900">{person.name}</h4>
+                                        <div className="flex items-center gap-2">
+                                          <h4 className="font-bold text-zinc-900">{person.name}</h4>
+                                          {totalVisits > 1 && (
+                                            <Badge variant="outline" className="bg-emerald-50 text-emerald-700 border-emerald-100 font-bold px-1.5 h-4 text-[9px]">
+                                              {totalVisits}x
+                                            </Badge>
+                                          )}
+                                        </div>
                                         <p className="text-[10px] text-zinc-400 uppercase font-bold tracking-widest">{person.type === 'visitor' ? 'Visitante' : 'Novo Membro'}</p>
                                       </div>
                                     </div>
@@ -791,6 +961,13 @@ export default function App() {
                       className="rounded-2xl px-6"
                     >
                       Retornos
+                    </Button>
+                    <Button 
+                      variant={reportTab === 'download' ? "default" : "ghost"}
+                      onClick={() => setReportTab('download')}
+                      className="rounded-2xl px-6"
+                    >
+                      Baixar Relatório
                     </Button>
                   </div>
                 </div>
@@ -874,7 +1051,7 @@ export default function App() {
                       </CardContent>
                     </Card>
                   </div>
-                ) : (
+                ) : reportTab === 'returnees' ? (
                   <Card className="border-none shadow-xl bg-white rounded-[2rem] overflow-hidden">
                     <CardHeader className="bg-zinc-50/50 p-8">
                       <div className="flex items-center gap-4">
@@ -927,6 +1104,60 @@ export default function App() {
                           )}
                         </TableBody>
                       </Table>
+                    </div>
+                  </Card>
+                ) : (
+                  <Card className="border-none shadow-xl bg-white rounded-[2rem] p-8 max-w-2xl mx-auto">
+                    <div className="flex flex-col items-center text-center space-y-6">
+                      <div className="bg-zinc-900 p-4 rounded-3xl shadow-xl">
+                        <BarChart3 className="text-white w-10 h-10" />
+                      </div>
+                      <div>
+                        <CardTitle className="text-2xl">Gerar Relatório em PDF</CardTitle>
+                        <CardDescription>
+                          Escolha o mês para baixar um resumo detalhado dos acolhimentos.
+                        </CardDescription>
+                      </div>
+
+                      <div className="w-full space-y-4 pt-4">
+                        <div className="space-y-2 text-left">
+                          <Label className="text-sm font-bold ml-1">Selecionar Mês</Label>
+                          <select 
+                            value={reportDownloadMonth}
+                            onChange={(e) => setReportDownloadMonth(e.target.value)}
+                            className="w-full h-12 px-4 rounded-xl border border-zinc-200 bg-white focus:ring-2 focus:ring-zinc-900 transition-all font-medium"
+                          >
+                            <option value="">Selecione o mês...</option>
+                            {monthlyData.map(m => (
+                              <option key={m.month} value={m.month}>{m.month}</option>
+                            ))}
+                          </select>
+                        </div>
+
+                        <Button 
+                          onClick={handleDownloadReport}
+                          disabled={!reportDownloadMonth}
+                          className="w-full h-14 bg-zinc-900 hover:bg-zinc-800 text-white font-bold rounded-2xl shadow-lg transition-all gap-3"
+                        >
+                          <CalendarIcon className="w-5 h-5" />
+                          Baixar Relatório em PDF
+                        </Button>
+                      </div>
+
+                      <div className="pt-6 border-t border-zinc-100 w-full">
+                        <div className="grid grid-cols-2 gap-4">
+                          <div className="bg-zinc-50 p-4 rounded-2xl flex flex-col items-center">
+                            <p className="text-[10px] text-zinc-400 font-bold uppercase tracking-widest">Acolhimentos</p>
+                            <p className="text-2xl font-black text-zinc-900">
+                              {reportDownloadMonth ? (monthlyData.find(m => m.month === reportDownloadMonth)?.visitors.length || 0) : '0'}
+                            </p>
+                          </div>
+                          <div className="bg-zinc-50 p-4 rounded-2xl flex flex-col items-center">
+                            <p className="text-[10px] text-zinc-400 font-bold uppercase tracking-widest">Registrados</p>
+                            <p className="text-2xl font-black text-zinc-900">{people.length}</p>
+                          </div>
+                        </div>
+                      </div>
                     </div>
                   </Card>
                 )}
